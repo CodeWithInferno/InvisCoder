@@ -9,6 +9,6 @@ class AppState: ObservableObject {
     
     // Properties for AI interaction
     @Published var isLoading: Bool = false
-    @Published var markdownContent: String = ""
     @Published var userQuery: String = ""
+    @Published var aiResponse: String?
 }

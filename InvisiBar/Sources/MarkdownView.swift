@@ -1,69 +1,74 @@
 import SwiftUI
+import Markdown
 
 struct MarkdownView: View {
     let markdown: String
     
-    // Simple struct to hold the parsed content
-    struct MarkdownSegment: Identifiable, Hashable {
-        let id = UUID()
-        let isCode: Bool
-        let text: String
+    // Use the library to parse the document
+    private var document: Document {
+        Document(parsing: markdown)
     }
     
-    private var segments: [MarkdownSegment] {
-        var result: [MarkdownSegment] = []
-        // Split by code block delimiter
-        let parts = markdown.components(separatedBy: "```")
-        
-        for (index, part) in parts.enumerated() {
-            if part.isEmpty { continue }
-            // Even-indexed parts are plain text, odd-indexed are code
-            let isCode = index % 2 != 0
-            result.append(MarkdownSegment(isCode: isCode, text: part.trimmingCharacters(in: .whitespacesAndNewlines)))
-        }
-        
-        return result
+    // Extract only the code blocks for the right column
+    private var codeBlocks: [CodeBlock] {
+        document.children.compactMap { $0 as? CodeBlock }
+    }
+    
+    // Create a new document containing everything *except* the code blocks for the left column
+    private var plainTextDocument: Document {
+        let nonCodeChildren = document.children.compactMap { $0 as? BlockMarkup }
+                                             .filter { !($0 is CodeBlock) }
+        return Document(nonCodeChildren)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(segments, id: \.self) { segment in
-                    if segment.isCode {
-                        CodeBlockView(code: segment.text)
-                    } else {
-                        Text(segment.text)
-                            .textSelection(.enabled)
+        HSplitView {
+            // Left Column: Render the non-code text directly.
+            // SwiftUI's Text view has built-in support for rendering Markdown.
+            ScrollView {
+                Text(plainTextDocument.format())
+                    .textSelection(.enabled)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .frame(minWidth: 200)
+
+            // Right Column: Render the code blocks
+            ScrollView {
+                VStack(alignment: .leading, spacing: 15) {
+                    // Use indices to iterate since CodeBlock is not Hashable
+                    ForEach(codeBlocks.indices, id: \.self) { index in
+                        CodeBlockView(block: codeBlocks[index])
                     }
                 }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .padding()
+            .frame(minWidth: 300)
         }
     }
 }
 
 struct CodeBlockView: View {
-    let code: String
+    let block: CodeBlock
     @State private var didCopy = false
+
+    private var language: String {
+        block.language ?? "code"
+    }
+    
+    private var code: String {
+        block.code.trimmingCharacters(in: .newlines)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header with language and copy button
             HStack {
-                // The first line of a code block is often the language, let's display it.
-                Text(code.components(separatedBy: .newlines).first ?? "code")
+                Text(language)
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button(action: {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(code, forType: .string)
-                    didCopy = true
-                    // Reset the "Copied" text after a delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        didCopy = false
-                    }
-                }) {
+                Button(action: copyCode) {
                     HStack(spacing: 4) {
                         Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                         Text(didCopy ? "Copied" : "Copy")
@@ -74,7 +79,6 @@ struct CodeBlockView: View {
             .padding(8)
             .background(Color.black.opacity(0.1))
 
-            // The actual code
             ScrollView(.horizontal) {
                 Text(code)
                     .font(.system(.body, design: .monospaced))
@@ -84,5 +88,14 @@ struct CodeBlockView: View {
         }
         .background(Color.black.opacity(0.05))
         .cornerRadius(8)
+    }
+    
+    private func copyCode() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        didCopy = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            didCopy = false
+        }
     }
 }

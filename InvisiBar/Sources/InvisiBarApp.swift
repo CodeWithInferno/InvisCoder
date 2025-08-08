@@ -2,16 +2,13 @@ import SwiftUI
 
 @main
 struct InvisiBarApp: App {
-    @StateObject private var appState = AppState()
+    // The AppDelegate is now the single source of truth.
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
         Settings {
+            // This is required for the app lifecycle but remains empty and invisible.
             EmptyView()
         }
-    }
-    
-    init() {
-        appDelegate.appState = appState
     }
 }

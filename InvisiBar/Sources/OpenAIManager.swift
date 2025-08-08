@@ -18,7 +18,7 @@ class OpenAIManager {
         let userText = query.isEmpty ? "Analyze this screenshot and provide a detailed, helpful response in Markdown format." : query
 
         let payload: [String: Any] = [
-            "model": "gpt-4-vision-preview",
+            "model": "gpt-4-turbo",
             "messages": [
                 [
                     "role": "user",
@@ -62,15 +62,25 @@ class OpenAIManager {
                 return
             }
             
+            // More robust JSON parsing
             do {
-                if let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let choices = jsonResponse["choices"] as? [[String: Any]],
+                guard let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    let rawResponse = String(data: data, encoding: .utf8) ?? "Unreadable response"
+                    completion(.failure(NSError(domain: "APIError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON format. Response: \(rawResponse)"])))
+                    return
+                }
+
+                if let choices = jsonResponse["choices"] as? [[String: Any]],
                    let firstChoice = choices.first,
                    let message = firstChoice["message"] as? [String: Any],
                    let content = message["content"] as? String {
                     completion(.success(content))
-                } else {
-                    completion(.failure(NSError(domain: "APIError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])))
+                } else if let errorDict = jsonResponse["error"] as? [String: Any], let message = errorDict["message"] as? String {
+                    completion(.failure(NSError(domain: "APIError", code: 2, userInfo: [NSLocalizedDescriptionKey: "OpenAI API Error: \(message)"])))
+                }
+                else {
+                    let rawResponse = String(data: data, encoding: .utf8) ?? "Unreadable response"
+                    completion(.failure(NSError(domain: "APIError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unexpected JSON structure. Response: \(rawResponse)"])))
                 }
             } catch {
                 completion(.failure(error))

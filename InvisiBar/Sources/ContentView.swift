@@ -3,19 +3,17 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     var onHover: (Bool) -> Void
-    var onQuerySubmit: () -> Void // Callback to trigger AI processing
 
     var body: some View {
         ZStack {
             // Main content based on the app's state
             if appState.isExpanded {
                 VStack(spacing: 0) {
-                    // The top part shows the result or the initial image
                     Group {
                         if appState.isLoading {
-                            ProgressView().padding()
-                        } else if !appState.markdownContent.isEmpty {
-                            MarkdownView(markdown: appState.markdownContent)
+                            ProgressView()
+                        } else if let aiResponse = appState.aiResponse {
+                            MarkdownView(markdown: aiResponse)
                         } else if let image = appState.capturedImage {
                             Image(nsImage: image)
                                 .resizable()
@@ -27,12 +25,10 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    // The bottom part is the text input field
-                    TextField("Ask a question about the screenshot...", text: $appState.userQuery)
+                    TextField("Ask a question about the screenshot... (Press Cmd+Enter to submit)", text: $appState.userQuery)
                         .textFieldStyle(PlainTextFieldStyle())
                         .padding(10)
                         .background(Color.black.opacity(0.1))
-                        .onSubmit(onQuerySubmit) // Trigger AI call on Enter
                 }
             } else {
                 // Collapsed View: Show instructions

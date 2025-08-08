@@ -5,12 +5,14 @@ import Carbon
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
-    var appState: AppState?
+    // The AppDelegate now owns the AppState, which fixes the crash.
+    private let appState = AppState()
     
     private var openAIManager: OpenAIManager?
     
     private var hotkeyH: HotkeyManager?
     private var hotkeyB: HotkeyManager?
+    private var hotkeyEnter: HotkeyManager?
     private var hotkeyUp: HotkeyManager?
     private var hotkeyDown: HotkeyManager?
     private var hotkeyLeft: HotkeyManager?
@@ -29,11 +31,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func setupOpenAI() {
-        if let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !apiKey.isEmpty, apiKey != "YOUR_API_KEY_HERE" {
-            self.openAIManager = OpenAIManager(apiKey: apiKey)
-        } else {
-            print("ERROR: OPENAI_API_KEY not found or not set in environment variables.")
-        }
+        let apiKey = "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"
+        self.openAIManager = OpenAIManager(apiKey: apiKey)
     }
 
     func createOverlayWindow() {
@@ -43,10 +42,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let height: CGFloat = 60
         self.originalSize = CGSize(width: width, height: height)
 
-        // Load saved position or use default
-        let savedSettings = SettingsManager.shared.load()
-        let initialX = savedSettings?.windowOriginX ?? (screenRect.width - width) / 2
-        let initialY = savedSettings?.windowOriginY ?? screenRect.height - height - 30
+        var initialX = (screenRect.width - width) / 2
+        var initialY = screenRect.height - height - 30
+
+        // Safety Check: Load saved position and validate it's on screen.
+        if let savedSettings = SettingsManager.shared.load(),
+           let savedX = savedSettings.windowOriginX,
+           let savedY = savedSettings.windowOriginY {
+            let savedRect = NSRect(x: savedX, y: savedY, width: width, height: height)
+            if screen.frame.intersects(savedRect) {
+                initialX = savedX
+                initialY = savedY
+            }
+        }
 
         window = NSWindow(
             contentRect: NSRect(x: initialX, y: initialY, width: width, height: height),
@@ -61,15 +69,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.ignoresMouseEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         
-        let contentView = ContentView(
-            onHover: { [weak self] isHovering in
-                self?.window.ignoresMouseEvents = !isHovering
-            },
-            onQuerySubmit: { [weak self] in
-                self?.processImageWithAI()
-            }
-        )
-        .environmentObject(appState!)
+        let contentView = ContentView(onHover: { [weak self] isHovering in
+            self?.window.ignoresMouseEvents = !isHovering
+        })
+        .environmentObject(appState) // Inject the state owned by the AppDelegate.
 
         window.contentView = NSHostingView(rootView: contentView)
         window.makeKeyAndOrderFront(nil)
@@ -80,6 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         hotkeyH = HotkeyManager(keyCode: UInt32(kVK_ANSI_H), modifiers: cmd) { [weak self] in self?.toggleAnalysisView() }
         hotkeyB = HotkeyManager(keyCode: UInt32(kVK_ANSI_B), modifiers: cmd) { [weak self] in self?.toggleWindowLevel() }
+        hotkeyEnter = HotkeyManager(keyCode: UInt32(kVK_Return), modifiers: cmd) { [weak self] in self?.processImageWithAI() }
         hotkeyUp = HotkeyManager(keyCode: UInt32(kVK_UpArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .up) }
         hotkeyDown = HotkeyManager(keyCode: UInt32(kVK_DownArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .down) }
         hotkeyLeft = HotkeyManager(keyCode: UInt32(kVK_LeftArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .left) }
@@ -87,18 +91,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func toggleAnalysisView() {
-        guard let appState = appState else { return }
         appState.isExpanded.toggle()
         
         if appState.isExpanded {
-            appState.markdownContent = ""
+            appState.aiResponse = nil
             appState.userQuery = ""
-            appState.isLoading = false
             resizeWindowForAnalysis()
             
             self.window.orderOut(nil)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                appState.capturedImage = self.takeScreenshot()
+                self.appState.capturedImage = self.takeScreenshot()
                 self.window.orderFront(nil)
             }
         } else {
@@ -107,16 +109,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func processImageWithAI() {
-        guard let appState = appState, let image = appState.capturedImage else { return }
+        guard let image = appState.capturedImage, appState.isExpanded else { return }
+        
         appState.isLoading = true
-        appState.markdownContent = ""
+        appState.aiResponse = nil
         
         openAIManager?.processImage(image: image, query: appState.userQuery) { [weak self] result in
             DispatchQueue.main.async {
-                self?.appState?.isLoading = false
+                self?.appState.isLoading = false
                 switch result {
-                case .success(let markdown): self?.appState?.markdownContent = markdown
-                case .failure(let error): self?.appState?.markdownContent = "Error: \(error.localizedDescription)"
+                case .success(let response): self?.appState.aiResponse = response
+                case .failure(let error): self?.appState.aiResponse = "Error: \(error.localizedDescription)"
                 }
             }
         }
@@ -167,7 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         window.setFrameOrigin(newOrigin)
-        saveWindowPosition() // Save after every move
+        saveWindowPosition()
     }
 }
 
