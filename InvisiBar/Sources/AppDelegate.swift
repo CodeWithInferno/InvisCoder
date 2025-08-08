@@ -114,12 +114,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appState.isLoading = true
         appState.aiResponse = nil
         
-        openAIManager?.processImage(image: image, query: appState.userQuery) { [weak self] result in
-            DispatchQueue.main.async {
-                self?.appState.isLoading = false
-                switch result {
-                case .success(let response): self?.appState.aiResponse = response
-                case .failure(let error): self?.appState.aiResponse = "Error: \(error.localizedDescription)"
+        // Convert NSImage to CGImage for OCR
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            appState.aiResponse = "Error: Could not convert image for OCR."
+            appState.isLoading = false
+            return
+        }
+        
+        // Step 1: Perform fast local OCR
+        OCRManager.recognizeText(on: cgImage) { [weak self] extractedText in
+            guard let self = self else { return }
+            
+            if extractedText.isEmpty {
+                DispatchQueue.main.async {
+                    self.appState.aiResponse = "Could not find any text in the screenshot."
+                    self.appState.isLoading = false
+                }
+                return
+            }
+            
+            // Step 2: Send the extracted text to the AI
+            self.openAIManager?.processText(extractedText: extractedText, query: self.appState.userQuery) { result in
+                DispatchQueue.main.async {
+                    self.appState.isLoading = false
+                    switch result {
+                    case .success(let response): self.appState.aiResponse = response
+                    case .failure(let error): self.appState.aiResponse = "Error: \(error.localizedDescription)"
+                    }
                 }
             }
         }

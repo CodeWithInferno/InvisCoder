@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 
 class OpenAIManager {
     private let apiKey: String
@@ -9,31 +8,37 @@ class OpenAIManager {
         self.apiKey = apiKey
     }
 
-    func processImage(image: NSImage, query: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let base64Image = image.base64String else {
-            completion(.failure(NSError(domain: "ImageError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Failed to encode image"])))
-            return
-        }
-
-        let userText = query.isEmpty ? "Analyze this screenshot and provide a detailed, helpful response in Markdown format." : query
+    func processText(extractedText: String, query: String, completion: @escaping (Result<String, Error>) -> Void) {
+        let systemPrompt = """
+        You are a discreet and clever assistant integrated into a stealth overlay for a user during a job interview or coding test.
+        Your primary goal is to provide concise, accurate, and directly helpful answers.
+        - The user will provide you with text extracted from their screen via OCR.
+        - They will also provide a specific query about that text.
+        - Be brief and to the point. Avoid conversational filler.
+        - If the user asks a question about code, provide the corrected or improved code first, followed by a very brief explanation.
+        - If the user asks a conceptual question, provide a clear, short answer. Use lists if it helps clarity.
+        - Format your entire response in Markdown.
+        """
+        
+        let userPrompt = """
+        Here is the text from my screen:
+        ---
+        \(extractedText)
+        ---
+        
+        Here is my question: \(query.isEmpty ? "Analyze the text above and provide a direct answer or solution." : query)
+        """
 
         let payload: [String: Any] = [
             "model": "gpt-4-turbo",
             "messages": [
                 [
+                    "role": "system",
+                    "content": systemPrompt
+                ],
+                [
                     "role": "user",
-                    "content": [
-                        [
-                            "type": "text",
-                            "text": userText
-                        ],
-                        [
-                            "type": "image_url",
-                            "image_url": [
-                                "url": "data:image/jpeg;base64,\(base64Image)"
-                            ]
-                        ]
-                    ]
+                    "content": userPrompt
                 ]
             ],
             "max_tokens": 1500
@@ -62,41 +67,21 @@ class OpenAIManager {
                 return
             }
             
-            // More robust JSON parsing
             do {
-                guard let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let rawResponse = String(data: data, encoding: .utf8) ?? "Unreadable response"
-                    completion(.failure(NSError(domain: "APIError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON format. Response: \(rawResponse)"])))
-                    return
-                }
-
-                if let choices = jsonResponse["choices"] as? [[String: Any]],
+                if let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let choices = jsonResponse["choices"] as? [[String: Any]],
                    let firstChoice = choices.first,
                    let message = firstChoice["message"] as? [String: Any],
                    let content = message["content"] as? String {
                     completion(.success(content))
-                } else if let errorDict = jsonResponse["error"] as? [String: Any], let message = errorDict["message"] as? String {
-                    completion(.failure(NSError(domain: "APIError", code: 2, userInfo: [NSLocalizedDescriptionKey: "OpenAI API Error: \(message)"])))
-                }
-                else {
+                } else {
                     let rawResponse = String(data: data, encoding: .utf8) ?? "Unreadable response"
-                    completion(.failure(NSError(domain: "APIError", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unexpected JSON structure. Response: \(rawResponse)"])))
+                    completion(.failure(NSError(domain: "APIError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format. Response: \(rawResponse)"])))
                 }
             } catch {
                 completion(.failure(error))
             }
         }
         task.resume()
-    }
-}
-
-extension NSImage {
-    var base64String: String? {
-        guard let tiffRepresentation = self.tiffRepresentation,
-              let bitmapImage = NSBitmapImageRep(data: tiffRepresentation),
-              let data = bitmapImage.representation(using: .jpeg, properties: [:]) else {
-            return nil
-        }
-        return data.base64EncodedString()
     }
 }
