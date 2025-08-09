@@ -51,6 +51,7 @@ class ScreenshotManager {
         previewWindow.isOpaque = false
         previewWindow.backgroundColor = .clear
         previewWindow.hasShadow = true
+        previewWindow.sharingType = .none // Exclude from screen sharing
 
         let imageView = NSImageView(image: NSImage(cgImage: image, size: previewRect.size))
         imageView.wantsLayer = true

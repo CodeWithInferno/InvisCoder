@@ -5,20 +5,14 @@ import Carbon
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
-    // The AppDelegate now owns the AppState, which fixes the crash.
     private let appState = AppState()
-    
     private var openAIManager: OpenAIManager?
-    
-    private var hotkeyH: HotkeyManager?
-    private var hotkeyB: HotkeyManager?
-    private var hotkeyEnter: HotkeyManager?
-    private var hotkeyUp: HotkeyManager?
-    private var hotkeyDown: HotkeyManager?
-    private var hotkeyLeft: HotkeyManager?
-    private var hotkeyRight: HotkeyManager?
-
+    private var hotkeys: [HotkeyManager?] = []
     private var originalSize: CGSize?
+    
+    // For continuous movement
+    private var moveTimer: Timer?
+    private var moveDirection: MoveDirection?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupOpenAI()
@@ -42,10 +36,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let height: CGFloat = 60
         self.originalSize = CGSize(width: width, height: height)
 
-        var initialX = (screenRect.width - width) / 2
-        var initialY = screenRect.height - height - 30
+        // New Default Position: Top-left with padding
+        let padding: CGFloat = 50
+        var initialX = padding
+        var initialY = screenRect.height - height - padding
 
-        // Safety Check: Load saved position and validate it's on screen.
         if let savedSettings = SettingsManager.shared.load(),
            let savedX = savedSettings.windowOriginX,
            let savedY = savedSettings.windowOriginY {
@@ -56,9 +51,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        window = NSWindow(
+        // Use NSPanel and .nonactivatingPanel to prevent the window from taking focus.
+        window = NSPanel(
             contentRect: NSRect(x: initialX, y: initialY, width: width, height: height),
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -66,13 +62,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .mainMenu + 1
-        window.ignoresMouseEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        window.sharingType = .none // Exclude from screen sharing
         
+        // Start as click-through, become interactive on hover.
+        window.ignoresMouseEvents = true
+
         let contentView = ContentView(onHover: { [weak self] isHovering in
             self?.window.ignoresMouseEvents = !isHovering
         })
-        .environmentObject(appState) // Inject the state owned by the AppDelegate.
+        .environmentObject(appState)
 
         window.contentView = NSHostingView(rootView: contentView)
         window.makeKeyAndOrderFront(nil)
@@ -80,28 +79,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setupHotkeys() {
         let cmd = UInt32(cmdKey)
+        let cmdCtrl = UInt32(cmdKey | controlKey)
         
-        hotkeyH = HotkeyManager(keyCode: UInt32(kVK_ANSI_H), modifiers: cmd) { [weak self] in self?.toggleAnalysisView() }
-        hotkeyB = HotkeyManager(keyCode: UInt32(kVK_ANSI_B), modifiers: cmd) { [weak self] in self?.toggleWindowLevel() }
-        hotkeyEnter = HotkeyManager(keyCode: UInt32(kVK_Return), modifiers: cmd) { [weak self] in self?.processImageWithAI() }
-        hotkeyUp = HotkeyManager(keyCode: UInt32(kVK_UpArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .up) }
-        hotkeyDown = HotkeyManager(keyCode: UInt32(kVK_DownArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .down) }
-        hotkeyLeft = HotkeyManager(keyCode: UInt32(kVK_LeftArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .left) }
-        hotkeyRight = HotkeyManager(keyCode: UInt32(kVK_RightArrow), modifiers: cmd) { [weak self] in self?.moveWindow(direction: .right) }
+        // Non-repeating hotkeys
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_ANSI_H), modifiers: cmd, onPress: { [weak self] in self?.toggleAnalysisView() }, onRelease: {}))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_ANSI_B), modifiers: cmd, onPress: { [weak self] in self?.toggleWindowLevel() }, onRelease: {}))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_Return), modifiers: cmd, onPress: { [weak self] in self?.processImageWithAI() }, onRelease: {}))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_ANSI_Q), modifiers: cmdCtrl, onPress: { NSApplication.shared.terminate(nil) }, onRelease: {}))
+        
+        // Repeating hotkeys for movement
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_UpArrow), modifiers: cmd, onPress: { self.startMoving(direction: .up) }, onRelease: { self.stopMoving() }))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_DownArrow), modifiers: cmd, onPress: { self.startMoving(direction: .down) }, onRelease: { self.stopMoving() }))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_LeftArrow), modifiers: cmd, onPress: { self.startMoving(direction: .left) }, onRelease: { self.stopMoving() }))
+        hotkeys.append(HotkeyManager(keyCode: UInt32(kVK_RightArrow), modifiers: cmd, onPress: { self.startMoving(direction: .right) }, onRelease: { self.stopMoving() }))
     }
     
     private func toggleAnalysisView() {
         appState.isExpanded.toggle()
-        
         if appState.isExpanded {
             appState.aiResponse = nil
             appState.userQuery = ""
             resizeWindowForAnalysis()
-            
-            self.window.orderOut(nil)
+            self.window.alphaValue = 0.0
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self.appState.capturedImage = self.takeScreenshot()
-                self.window.orderFront(nil)
+                self.window.alphaValue = 1.0
             }
         } else {
             resizeWindow(to: originalSize)
@@ -110,21 +112,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func processImageWithAI() {
         guard let image = appState.capturedImage, appState.isExpanded else { return }
-        
         appState.isLoading = true
         appState.aiResponse = nil
-        
-        // Convert NSImage to CGImage for OCR
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             appState.aiResponse = "Error: Could not convert image for OCR."
             appState.isLoading = false
             return
         }
-        
-        // Step 1: Perform fast local OCR
         OCRManager.recognizeText(on: cgImage) { [weak self] extractedText in
             guard let self = self else { return }
-            
             if extractedText.isEmpty {
                 DispatchQueue.main.async {
                     self.appState.aiResponse = "Could not find any text in the screenshot."
@@ -132,8 +128,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return
             }
-            
-            // Step 2: Send the extracted text to the AI
             self.openAIManager?.processText(extractedText: extractedText, query: self.appState.userQuery) { result in
                 DispatchQueue.main.async {
                     self.appState.isLoading = false
@@ -178,8 +172,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private enum MoveDirection { case up, down, left, right }
     
-    private func moveWindow(direction: MoveDirection) {
-        guard let window = window else { return }
+    private func startMoving(direction: MoveDirection) {
+        guard moveTimer == nil else { return } // Don't start a new timer if one is running
+        self.moveDirection = direction
+        moveTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.moveWindow()
+            }
+        }
+    }
+    
+    private func stopMoving() {
+        moveTimer?.invalidate()
+        moveTimer = nil
+        moveDirection = nil
+        saveWindowPosition() // Save position once movement stops
+    }
+    
+    private func moveWindow() {
+        guard let window = window, let direction = moveDirection else { return }
         let moveAmount: CGFloat = 10.0
         var newOrigin = window.frame.origin
         
@@ -191,7 +202,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         window.setFrameOrigin(newOrigin)
-        saveWindowPosition()
     }
 }
-

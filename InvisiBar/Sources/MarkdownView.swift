@@ -6,7 +6,7 @@ struct MarkdownView: View {
     
     // The library provides a view that handles all rendering.
     var body: some View {
-        ScrollView {
+        ScrollView([.vertical, .horizontal]) {
             Markdown(markdown)
                 .markdownTheme(.gitHub) // Use a theme for styling.
                 .textSelection(.enabled)

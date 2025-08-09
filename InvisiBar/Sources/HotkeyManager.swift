@@ -2,7 +2,9 @@ import Foundation
 import Carbon
 
 @MainActor
-private var hotkeyHandlers = [UInt32: () -> Void]()
+private var hotkeyPressHandlers = [UInt32: () -> Void]()
+@MainActor
+private var hotkeyReleaseHandlers = [UInt32: () -> Void]()
 @MainActor
 private var isHandlerInstalled = false
 @MainActor
@@ -14,9 +16,13 @@ private let eventHandler: EventHandlerUPP = { _, event, _ -> OSStatus in
         return OSStatus(eventNotHandledErr)
     }
 
+    let eventKind = GetEventKind(event)
+    
     DispatchQueue.main.async {
-        if let handler = hotkeyHandlers[hotkeyID.id] {
-            handler()
+        if eventKind == UInt32(kEventHotKeyPressed) {
+            hotkeyPressHandlers[hotkeyID.id]?()
+        } else if eventKind == UInt32(kEventHotKeyReleased) {
+            hotkeyReleaseHandlers[hotkeyID.id]?()
         }
     }
     
@@ -28,10 +34,13 @@ class HotkeyManager {
     private var hotkeyID: UInt32?
 
     @MainActor
-    init?(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
+    init?(keyCode: UInt32, modifiers: UInt32, onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
         if !isHandlerInstalled {
-            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: OSType(kEventHotKeyPressed))
-            if InstallEventHandler(GetApplicationEventTarget(), eventHandler, 1, &eventType, nil, nil) != noErr {
+            var eventTypes = [
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: OSType(kEventHotKeyPressed)),
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: OSType(kEventHotKeyReleased))
+            ]
+            if InstallEventHandler(GetApplicationEventTarget(), eventHandler, 2, &eventTypes, nil, nil) != noErr {
                 return nil
             }
             isHandlerInstalled = true
@@ -42,10 +51,12 @@ class HotkeyManager {
         self.hotkeyID = id
         
         let eventHotKeyID = EventHotKeyID(signature: "isb".fourCharCodeValue, id: id)
-        hotkeyHandlers[id] = handler
+        hotkeyPressHandlers[id] = onPress
+        hotkeyReleaseHandlers[id] = onRelease
 
         if RegisterEventHotKey(keyCode, modifiers, eventHotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef) != noErr {
-            hotkeyHandlers[id] = nil
+            hotkeyPressHandlers[id] = nil
+            hotkeyReleaseHandlers[id] = nil
             return nil
         }
     }
@@ -56,7 +67,8 @@ class HotkeyManager {
         }
         if let id = hotkeyID {
             DispatchQueue.main.async {
-                hotkeyHandlers[id] = nil
+                hotkeyPressHandlers[id] = nil
+                hotkeyReleaseHandlers[id] = nil
             }
         }
     }
